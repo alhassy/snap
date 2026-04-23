@@ -208,6 +208,86 @@ the actual output plist even when the stored expectation is wrong.
 Without this trick, the updater would never get past the first
 failing ~should~ to see what the outputs should have been.
 
+*** A more intricate example — a mini Markdown renderer
+
+The "double" relation is small enough to fit on one screen, which is
+why it makes a good first example — but it is also symmetric
+(~2 × input = output~), so the test and its inverse look the same.
+Real snapshot tests are asymmetric: the input is a short human-
+written string; the output is a mechanical rendering that has nested
+structure, escaped characters, and several independent facets worth
+asserting.  Hand-typing that output is the exact pain
+~define-relation~ axes.
+
+Consider a toy Markdown-to-HTML renderer — bold, italic, and links —
+whose implementation returns both the rendered HTML and an inventory
+of the links it encountered:
+
+#+begin_src emacs-lisp
+(defun my/render-md (src)
+  "Render a terse Markdown SRC to (HTML . LINKS).
+Recognises `**bold**', `*italic*', and `[text](url)'."
+  (let ((s src) (links nil))
+    (while (string-match "\\[\\([^]]+\\)\\](\\([^)]+\\))" s)
+      (push (cons (match-string 1 s) (match-string 2 s)) links)
+      (setq s (replace-match
+               (format "<a href=\"%s\">%s</a>"
+                       (match-string 2 s) (match-string 1 s))
+               t t s)))
+    (setq s (replace-regexp-in-string
+             "\\*\\*\\([^*]+\\)\\*\\*" "<b>\\1</b>" s t))
+    (setq s (replace-regexp-in-string
+             "\\*\\([^*]+\\)\\*" "<i>\\1</i>" s t))
+    (cons s (nreverse links))))
+#+end_src
+
+We want two assertions per example — the rendered HTML *and* the
+extracted link alist — so the relation declares *two* output keys.
+Inputs are read (~:source~); outputs are written (~:expected-html~,
+~:expected-links~):
+
+#+begin_src emacs-lisp
+(define-relation markdown-render (source expected-html expected-links)
+  "SOURCE renders to EXPECTED-HTML, with EXPECTED-LINKS extracted."
+  (let* ((result (my/render-md source))
+         (html   (car result))
+         (links  (cdr result)))
+    (should (equal expected-html  html))
+    (should (equal expected-links links))
+    (list :expected-html html :expected-links links)))
+#+end_src
+
+Now, *write the test with the outputs left blank* — just the inputs,
+and stub values for the snapshots:
+
+#+begin_src emacs-lisp
+(define-markdown-render-test "bold and a link" [markdown]
+  :source "Read **the docs** or [the blog](https://ex.com)."
+  :expected-html  ""
+  :expected-links nil)
+#+end_src
+
+One ~C-u C-x C-e~ on that form and ~snap~ rewrites both output keys
+in place, yielding:
+
+#+begin_src emacs-lisp
+(define-markdown-render-test "bold and a link" [markdown]
+  :source "Read **the docs** or [the blog](https://ex.com)."
+  :expected-html  "Read <b>the docs</b> or <a href=\"https://ex.com\">the blog</a>."
+  :expected-links (("the blog" . "https://ex.com")))
+#+end_src
+
+That second string — escaped inner quotes and all — is precisely
+what nobody wants to hand-type.  And the moment the renderer's
+behaviour shifts (say, you add ~rel="nofollow"~ to external links),
+one keystroke refreshes every snapshot across every test in the
+file — each example checked, each example updated, each example
+re-run, all without leaving the source buffer.
+
+This is the shape of every interesting ~define-relation~ use:
+multiple assertions, structured output, and a refresh gesture that
+costs one chord.
+
 * The eval-and-run workflow — ~C-x C-e~ does more
 
 *The problem.*  The usual TDD loop in ERT has two steps: ~C-x C-e~ at
