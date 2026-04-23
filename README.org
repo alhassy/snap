@@ -1,0 +1,316 @@
+#+title: snap — Snapshot Testing for Emacs Lisp
+#+author: Musa Al-hassy
+#+options: toc:2
+
+~snap~ is a terse layer atop ERT that turns test-writing in Emacs Lisp
+from a ceremony into a conversation.  Natural-language test names,
+fixture macros that are one line to declare, and snapshot tests whose
+expectations you refresh with ~C-u C-x C-e~ — no separate runner, no
+external framework, just ERT with the dull edges sanded off.
+
+* What snap gives us
+
+| Layer                 | What it is                              | When to reach for it            |
+|-----------------------+-----------------------------------------+---------------------------------|
+| ~deftest~             | identity fixture (no wrapping)          | everyday unit tests             |
+| ~deftestfixture~      | macro-generating macro for fixtures     | recurring setup/teardown        |
+| ~define-relation~     | declarative input ⟶ output snapshots    | golden-file / example-based     |
+
+All three generate ordinary ~ert-deftest~ forms under the hood — so
+~M-x ert~, ~ert-run-tests-batch~, the ERT buffer, tag filtering, and
+every other piece of ERT infrastructure keep working unchanged.
+
+* Motivation — what ERT alone is missing
+
+ERT is excellent at the hard part (running tests, reporting results)
+and, by design, deliberately terse about the easy parts.  Three rough
+edges transpire:
+
+- *Test names are hand-mangled into symbols.*  ~(ert-deftest
+  frobnicates-when-empty () …)~ is a kebab-cased paraphrase of what
+  we actually mean.  We want to write the sentence.
+
+- *No native fixture syntax.*  The ERT manual (§ 6.2) explicitly
+  punts: ~with-my-fixture~ macros are the idiomatic Lisp approach,
+  and special fixture syntax "would provide only a minor
+  simplification."  Needless indirection — let us make that minor
+  simplification once and be done.
+
+- *No snapshot-updating idiom.*  Expected values drift.  Without a
+  keystroke to refresh them, nobody does — and the tests either get
+  deleted or fossilise.
+
+~snap~ axes all three.
+
+* The three layers — by way of example
+
+** ~deftest~ — natural-language names, auto-derived tags
+
+*The problem.*  ~ert-deftest~ takes a symbol as the test name.  So you
+write the sentence you mean ("addition is commutative"), then hand-
+mangle it into a symbol (~addition-is-commutative~), then remember to
+also tag the test (~:tags '(math)~), then remember to pick a tag that
+matches what ~M-x ert (tag …) RET~ will expect.  Three acts of
+bookkeeping for one intention.  Over a hundred tests, the bookkeeping
+quietly drifts: tags are forgotten, names paraphrase inconsistently,
+and the test name you see in the ERT buffer barely resembles the
+sentence in your head.
+
+*What ~deftest~ does.*  You write the sentence; ~deftest~ writes the
+symbol and the tags for you.
+
+#+begin_src emacs-lisp
+(deftest "addition is commutative" [math]
+  (should (= (+ 2 3) (+ 3 2))))
+#+end_src
+
+The generated test name is =math··⇨··addition·is·commutative=, tagged
+with =("addition" math)=.  Spaces become interpuncts (configurable —
+see [[*Customisation][Customisation]]), and the first word of the
+description becomes an auto-tag so ~M-x ert RET (tag addition) RET~
+runs exactly the tests whose description starts with "addition" — no
+separate tag declaration needed.
+
+No fixture here — ~deftest~ is the identity case, defined in ~snap.el~
+itself as ~(deftestfixture deftest)~.  Which brings us to the layer
+above.
+
+** ~deftestfixture~ — bake your setup/teardown into a macro
+
+*The problem.*  Most real tests need a baseline state before the
+assertions make sense: a fresh buffer, a temp file, some dynamic
+variables bound to safe defaults, an ~unwind-protect~ guarding
+teardown against a failing ~should~.  The ERT manual (§ 6.2) punts on
+fixture syntax with the suggestion "write a ~with-my-fixture~
+macro" — leaving every project to re-invent the same two-step dance
+by hand: write the wrapper macro, then remember to wrap every single
+test body in it.  Miss the wrap and the test runs without setup; miss
+the ~unwind-protect~ and a failing assertion leaks a buffer.
+
+*What ~deftestfixture~ does.*  Declare the fixture once — as the
+*shape* of a test body, with a ~&body~ hole where the real body
+plugs in — and ~deftestfixture~ generates a new test macro that
+wraps every body for you.  You never again write ~(with-my-fixture
+(ert-deftest …))~ by hand.
+
+By way of example: suppose every test in a file needs a fresh
+~org-mode~ buffer that gets killed afterwards.  Declare the fixture
+once:
+
+#+begin_src emacs-lisp
+(deftestfixture deforgtest
+  "Switch to a temporary org-mode buffer, run BODY, then kill it."
+  (let ((buf (generate-new-buffer "*test-org*")))
+    (switch-to-buffer buf)
+    (org-mode)
+    (unwind-protect (progn &body)
+      (kill-buffer buf))))
+#+end_src
+
+Then every test in the file opens with ~(deforgtest "…" [tag] …body…)~
+— no boilerplate, no forgotten ~kill-buffer~, no leaking state between
+runs.  The magic hole is ~&body~: whatever you pass as the test body is
+spliced in at that exact spot (via ~cl-subst~, so every occurrence
+gets replaced — you can reference ~&body~ more than once if the
+fixture genuinely calls for it).
+
+The signature of any macro generated by ~deftestfixture~ is:
+
+#+begin_example
+(NAME DESCRIPTION &optional TAGS &rest BODY)
+#+end_example
+
+where =DESCRIPTION= is a string, =TAGS= is an optional vector, and
+=BODY= is the test.  Every ~deftest~ nicety — natural-language names,
+auto-derived tags, special-character mangling — carries over to every
+fixture you define.  In fact, ~deftest~ itself is just the degenerate
+case: ~(deftestfixture deftest)~ with no fixture at all.
+
+** ~define-relation~ — declarative input ⟶ output snapshots
+
+*The problem.*  A great many tests have the same shape — /given this
+input, do we still produce that output?/  Parser tests, rendering
+tests, pretty-printer round-trips, export tests, config transformers
+— all of them compare an /actual/ computed value against an
+/expected/ literal baked into the test source.  The expected value is
+colloquially known as a *snapshot*: a frozen representative of what
+the function is supposed to produce.
+
+Snapshot tests have one mode of failure and one mode of decay:
+
+1. *Genuine regression* — the output changed and it shouldn't have.
+   You fix the code.
+2. *Drift* — the output changed and it /should/ have, because the
+   requirements moved.  You must now update the expected literal.
+   With no keystroke to do this, you hand-type the new value, run the
+   test, hand-type again if it's still wrong, and eventually get
+   bored and delete the assertion.
+
+The fix for the second is a *snapshot-updating idiom*: a single gesture that
+rewrites the expected literal in the source buffer to match the
+actual computed value.  Jest has ~--updateSnapshot~; Rust has
+~insta::assert_snapshot~ with ~INSTA_UPDATE=always~.  ERT has
+nothing.
+
+*What ~define-relation~ does.*  You declare a relation among named
+parameters — some /input/ (the stimulus), some /output/ (the
+snapshot) — with a body that computes the actuals, asserts them
+against the expecteds, and returns a plist naming the output values.
+From that one declaration, ~snap~ generates four things:
+
+- a *test macro* (~define-NAME-test~) for writing individual
+  examples, exactly like ~deftest~ plus the input/output keywords;
+- a *checker* (~NAME--check~) that runs the body as a normal
+  function, signalling ~ert-test-failed~ on mismatch — this is what
+  the generated test actually calls;
+- a *compute function* (~NAME--compute~) that runs the body with
+  ~ert-fail~ neutered, yielding the actual output plist even when
+  the stored expectation is wrong — this is how the updater knows
+  what the new snapshot should be;
+- an *updater* (~NAME--update-at~, plus ~--update~ and
+  ~--update-by-name~ conveniences) that rewrites the output keys in
+  the source buffer to match whatever ~compute~ returned.
+
+By way of example — a trivial "double" relation:
+
+#+begin_src emacs-lisp
+(define-relation double (input expected)
+  "EXPECTED = 2 × INPUT."
+  (let ((actual (* 2 input)))
+    (should (equal expected actual))
+    (list :expected actual)))
+#+end_src
+
+This defines one macro — ~define-double-test~ — which we call like so:
+
+#+begin_src emacs-lisp
+(define-double-test "small positives" [double]
+  :input 3
+  :expected 6)
+#+end_src
+
+~C-x C-e~ at the end of this form both defines and runs the test.
+When ~:expected~ is wrong (say, =7=), the ERT failure report grows two
+buttons — =[Show Diff]= (a Magit-styled diff of expected vs actual)
+and =[Update Snapshot]= (rewrite =:expected= in the source buffer,
+re-run).  Equivalently, ~C-u C-x C-e~ on the test form refreshes the
+output keys in place — no hand-typing the new golden value.
+
+*The body's contract.*  It may call ~should~ for assertions, and
+*must* return a plist whose keys are a subset of the declared
+params — these are the *output keys*, and they are what the updater
+rewrites.  Inputs are read; outputs are written.
+
+*How the updater survives a failing assertion.*  During snapshot
+update, ~ert-fail~ is ~cl-letf~-shadowed to ~ignore~, so ~should~
+silently passes through and the body runs to completion — yielding
+the actual output plist even when the stored expectation is wrong.
+Without this trick, the updater would never get past the first
+failing ~should~ to see what the outputs should have been.
+
+* The eval-and-run workflow — ~C-x C-e~ does more
+
+*The problem.*  The usual TDD loop in ERT has two steps: ~C-x C-e~ at
+the end of an ~ert-deftest~ form (to /define/ the test), then ~M-x
+ert RET t RET~ or picking the test name out of a menu (to /run/ it).
+Two gestures for one intention.  For snapshot-updating it's worse:
+you must find the failure buffer, click a button, or manually invoke
+~M-x your-project-update-snapshot RET~.  The workflow demands context
+switches at the exact moments you're in the tightest feedback loop.
+
+*What the advice does.*  ~snap.el~ installs an ~:around~ advice on
+~eval-last-sexp~ (~my/eval-last-sexp--run-test~) that collapses both
+gestures into one.  The advice consults a registry of macro names
+(~deftestfixture--registry~) populated by every ~deftestfixture~ and
+~define-relation~ declaration, so it knows which forms are tests and
+which are ordinary Lisp.  Ordinary Lisp is evaluated normally; test
+forms are evaluated /and then immediately run/.  For ~define-relation~
+forms, a prefix argument (~C-u~) switches mode entirely — instead of
+running the test, the advice calls the relation's updater, rewriting
+the output keys in place.  The semantics in one table:
+
+| Gesture            | Form at point                  | What happens                                  |
+|--------------------+--------------------------------+-----------------------------------------------|
+| ~C-x C-e~          | any registered test macro call | eval the form, then run the generated ~ert-deftest~ |
+| ~C-x C-e~          | anything else                  | unchanged — vanilla ~eval-last-sexp~          |
+| ~C-u C-x C-e~      | a ~define-NAME-test~ call      | run the updater; do not insert the eval result |
+
+Registration happens in ~deftestfixture--registry~, a hash table keyed
+by macro name.  Plain ~deftestfixture~ macros register with value ~t~;
+~define-relation~ macros register with a plist ~(:updater FN :compute
+FN)~ that the advice consults to decide what ~C-u~ should do.
+
+* Installation
+
+** Manual
+
+#+begin_src emacs-lisp
+(load-file "~/snap/snap.el")
+#+end_src
+
+** use-package
+
+#+begin_src emacs-lisp
+(use-package snap
+  :load-path "~/snap/")
+#+end_src
+
+** Dependencies
+
+- Emacs ≥ 27.1
+- ~s~ ≥ 1.13.1 — string helpers
+- ~magit~ ≥ 3.0 — only for ~define-relation--show-diff~; tests skip
+  gracefully when absent
+
+Built-ins used: ~cl-lib~, ~ert~, ~seq~.
+
+* Customisation
+
+One knob — the character that replaces whitespace in generated test
+names:
+
+#+begin_src emacs-lisp
+(setq deftest-space "·") ;; interpunct (default)
+;; Alternatives:
+;; (setq deftest-space "-")  ;; hyphens
+;; (setq deftest-space "_")  ;; snakecase
+;; (setq deftest-space "␣") ;; open-box / underbracket
+#+end_src
+
+Pick whichever renders best in your ERT buffer.
+
+* Running the tests
+
+~snap~ ships with an ERT suite that dogfoods ~deftest~ — each test
+uses the very primitive it exercises.  To run:
+
+#+begin_src shell
+emacs --batch \
+      -l ~/snap/snap.el \
+      -l ~/snap/snap-tests.el \
+      -f ert-run-tests-batch-and-exit
+#+end_src
+
+Or interactively: load both files, then ~M-x ert RET t RET~.
+
+Tag-filtered runs:
+
+- ~(tag deftest)~ — the identity layer
+- ~(tag deftestfixture)~ — the macro-generating macro
+- ~(tag define-relation)~ — the snapshot layer
+- ~(tag advice)~ — the ~eval-last-sexp~ integration
+
+* Prior art — and why ~snap~ stays ERT-native
+
+- *Buttercup* — RSpec-ish describe/it DSL.  Lovely, but it is its own
+  runner, its own buffer, its own mental model.  ~snap~ remains inside
+  ERT so existing test tooling keeps working.
+- *ert-async* — asynchronous helpers for ERT.  Orthogonal to ~snap~.
+- *el-mock* — mocking library.  Also orthogonal; combine freely.
+
+~snap~'s bet: ERT is fine; what we want is a thinner writing surface
+over it, not a replacement.
+
+* Licence
+
+GPL v3 — see the header of ~snap.el~.
