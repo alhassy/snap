@@ -444,5 +444,4 @@
       (should (ert-test-p test))
       (should (ert-test-passed-p (ert-run-test test))))))
 
-(provide 'snap-tests)
 ;;; snap-tests.el ends here

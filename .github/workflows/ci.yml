@@ -19,7 +19,7 @@ jobs:
         with:
           version: 30.1
 
-      - name: Install s.el from GNU ELPA
+      - name: Install s.el from MELPA
         run: |
           emacs --batch --eval '(progn
             (require (quote package))
