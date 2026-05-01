@@ -2,9 +2,11 @@
 #+author: Musa Al-hassy
 #+options: toc:2
 
-#+html: <a href="https://github.com/alhassy/snap/actions?query=workflow%3A%22snap+CI%22">
-#+html:   <img src="https://github.com/alhassy/snap/workflows/snap%20CI/badge.svg" alt="snap Tests Pass">
-#+html: </a>
+#+html: <p align="center">
+#+html:   <a href="https://github.com/alhassy/snap/actions?query=workflow%3A%22snap+CI%22">
+#+html:     <img src="https://github.com/alhassy/snap/workflows/snap%20CI/badge.svg" alt="snap Tests Pass">
+#+html:   </a>
+#+html: </p>
 
 ~snap~ is a terse layer atop ERT that turns test-writing in Emacs Lisp
 from a ceremony into a conversation.  Natural-language test names,
