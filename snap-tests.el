@@ -90,8 +90,8 @@
 (deftest "deftest signals cl-assert on non-string description" [snap deftest validation]
   (should-error (macroexpand-1 '(deftest 42 (should t)))))
 
-(deftest "deftest is registered in deftestfixture--registry" [snap deftest registry]
-  (should (eq (gethash 'deftest deftestfixture--registry) t)))
+(deftest "deftest is registered in snap--registry" [snap deftest registry]
+  (should (eq (gethash 'deftest snap--registry) t)))
 
 (deftest "deftest bodies are run -- should fires as expected" [snap deftest smoke]
   ;; If this test body were ignored, the failing `should' below would pass.
@@ -110,7 +110,7 @@
     &body))
 
 (deftest "deftestfixture registers the generated macro" [snap deftestfixture registry]
-  (should (eq (gethash 'snap-tests--with-flag deftestfixture--registry) t)))
+  (should (eq (gethash 'snap-tests--with-flag snap--registry) t)))
 
 (deftest "deftestfixture splices body at &body hole" [snap deftestfixture]
   (let* ((expanded (macroexpand-1
@@ -137,7 +137,7 @@
   (let ((x 1)) &body))
 
 (deftest "deftestfixture accepts a fixture without a docstring" [snap deftestfixture]
-  (should (eq (gethash 'snap-tests--no-doc-fixture deftestfixture--registry) t))
+  (should (eq (gethash 'snap-tests--no-doc-fixture snap--registry) t))
   (let ((expanded (macroexpand-1
                    '(snap-tests--no-doc-fixture "no-doc case" (should (= x 1))))))
     (should (eq (car expanded) 'ert-deftest))))
@@ -159,7 +159,7 @@
 
 (deftest "deftestfixture with no fixture at all acts like deftest" [snap deftestfixture]
   (deftestfixture snap-tests--identity)
-  (should (eq (gethash 'snap-tests--identity deftestfixture--registry) t))
+  (should (eq (gethash 'snap-tests--identity snap--registry) t))
   (let ((expanded (macroexpand-1
                    '(snap-tests--identity "plain" (should t)))))
     ;; No wrapping: body appears verbatim.
@@ -192,7 +192,7 @@
   (should (fboundp 'define-snap-tests--double-test)))
 
 (deftest "define-relation registers the test macro with :updater and :compute" [snap define-relation registry]
-  (let ((entry (gethash 'define-snap-tests--double-test deftestfixture--registry)))
+  (let ((entry (gethash 'define-snap-tests--double-test snap--registry)))
     (should (consp entry))
     (should (eq (plist-get entry :updater)
                 'snap-tests--double--update))
@@ -333,11 +333,11 @@
 ;; 5. The `eval-last-sexp' advice
 ;; ═══════════════════════════════════════════════════════════════════
 
-(deftest "advice my/eval-last-sexp--run-test is installed on eval-last-sexp"
+(deftest "advice snap--eval-last-sexp is installed on eval-last-sexp"
     [snap advice]
   (let ((found nil))
     (advice-mapc (lambda (fn _props)
-                   (when (eq fn 'my/eval-last-sexp--run-test)
+                   (when (eq fn 'snap--eval-last-sexp)
                      (setq found t)))
                  'eval-last-sexp)
     (should found)))
