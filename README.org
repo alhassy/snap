@@ -8,6 +8,64 @@
 #+html:   </a>
 #+html: </p>
 
+#+begin_src latex-as-png :file snap-overview.png :resolution "720" :results raw value replace :exports results
+\usepackage{smartdiagram}
+\usepackage{graphicx}
+\vspace{1.5em}
+\centering{Three layers, one framework: \\
+\texttt{deftest} · \texttt{deftestfixture} · \texttt{define-relation}}
+
+\vspace{1em}
+\smartdiagramset{
+  planet color=black!75,
+  planet size=3.5cm,
+  planet font=\normalfont\bfseries\normalsize,
+  satellite size=3.8cm,
+  satellite font=\normalfont\small,
+  satellite text width=3.7cm,
+  distance planet-satellite=6.2cm,
+  connection color=gray!60,
+  connection line width=0.06cm,
+  text color=black,
+  font=\small\sffamily
+}
+\newcommand{\new}[1]{{\large \texttt{\mbox{#1}}}}
+\newcommand{\replaces}{\\[1em]\textcolor{black!80}{replaces}\vspace{0em}}
+\newcommand{\old}[1]{\\[1em]\textcolor{black!70}{\texttt{\mbox{#1}}}}
+\newcommand{\andAlso}{\\\textcolor{black!80}{and}\vspace{-1em}}
+\resizebox{1.0\textwidth}{!}{%
+\smartdiagram[constellation diagram]{%
+  {\color{white}\mbox{\hspace{-1em}\LARGE\texttt{snap.el}}\\[1em]\mbox{three layers}},
+  \new{(deftest "my test" [tag]} \new{body...)}
+    \replaces
+    \old{(ert-deftest hand--mangled}
+    \old{() :tags '(…) body...)},
+  \new{(deftestfixture defmytest}
+    \new{"doc" (setup \&body))}
+    \replaces
+    \old{(defmacro with-my-fixture}
+    \old{(\&rest body) setup...)},
+  \new{(define-mytest "name"}
+    \new{:input x :expected "")}
+    \new{+ C-u C-x C-e}
+    \replaces
+    \old{hand-type \& hand-update}
+    \old{every snapshot string}
+}} % end \resizebox + \smartdiagram
+
+\vspace{1em}
+{\textcolor{black!44} \hrule}
+\vspace{1em}
+
+\centering{%
+\texttt{(define-double-test "small" :input 3 :expected \textcolor{red!70}{""})}}
+\\[0.8em] \textcolor{black!80}{after one \texttt{C-u C-x C-e}:}
+\\[0.8em] {\textcolor{black!70}{\texttt{(define-double-test "small" :input 3 :expected \textcolor{black}{6})}}}
+\\[0.5em] {\small\textcolor{black!55}{snap rewrites the output key in the source buffer,
+then re-runs the test.}}
+\\{\color{white} Bye!}
+#+end_src
+
 ~snap~ is a terse layer atop ERT that turns test-writing in Emacs Lisp
 from a ceremony into a conversation.  Natural-language test names,
 fixture macros that are one line to declare, and snapshot tests whose
