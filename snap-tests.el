@@ -1,8 +1,13 @@
 ;;; snap-tests.el --- Tests for snap.el -*- lexical-binding: t -*-
 
 ;; Copyright (c) 2025 Musa Al-hassy
+
 ;; Author: Musa Al-hassy <alhassy@gmail.com>
-;; SPDX-License-Identifier: GPL-3.0-or-later
+
+;; This program is free software; you can redistribute it and/or modify
+;; it under the terms of the GNU General Public License as published by
+;; the Free Software Foundation, either version 3 of the License, or
+;; (at your option) any later version.
 
 ;;; Commentary:
 ;;
@@ -31,14 +36,14 @@
 (snap-define-fixture deftest)
 
 ;; ═══════════════════════════════════════════════════════════════════
-;; 1. `deftest-space' -- the naming knob
+;; 1. `snap-deftest-space' -- the naming knob
 ;; ═══════════════════════════════════════════════════════════════════
 
-(deftest "deftest-space defaults to interpunct" [snap deftest-space]
-  (should (equal deftest-space "·")))
+(deftest "snap-deftest-space defaults to interpunct" [snap snap-deftest-space]
+  (should (equal snap-deftest-space "·")))
 
-(deftest "deftest-space rebinding changes generated test name" [snap deftest-space]
-  (let ((deftest-space "-"))
+(deftest "snap-deftest-space rebinding changes generated test name" [snap snap-deftest-space]
+  (let ((snap-deftest-space "-"))
     (let ((expanded (macroexpand-1 '(deftest "two words" (should t)))))
       ;; (ert-deftest two-words nil :tags '("two") (should t))
       (should (eq (nth 1 expanded) 'two-words)))))
@@ -56,7 +61,7 @@
     (should (eq     (nth 3 expanded) :tags))
     (should (equal  (nth 5 expanded) '(should t)))))
 
-(deftest "deftest replaces spaces with deftest-space" [snap deftest name-mangling]
+(deftest "deftest replaces spaces with snap-deftest-space" [snap deftest name-mangling]
   (let ((expanded (macroexpand-1 '(deftest "a b c" (should t)))))
     (should (eq (nth 1 expanded) 'a·b·c))))
 

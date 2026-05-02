@@ -433,11 +433,11 @@ One knob — the character that replaces whitespace in generated test
 names:
 
 #+begin_src emacs-lisp
-(setq deftest-space "·") ;; interpunct (default)
+(setq snap-deftest-space "·") ;; interpunct (default)
 ;; Alternatives:
-;; (setq deftest-space "-")  ;; hyphens
-;; (setq deftest-space "_")  ;; snakecase
-;; (setq deftest-space "␣") ;; open-box / underbracket
+;; (setq snap-deftest-space "-")  ;; hyphens
+;; (setq snap-deftest-space "_")  ;; snakecase
+;; (setq snap-deftest-space "␣") ;; open-box / underbracket
 #+end_src
 
 Pick whichever renders best in your ERT buffer.
