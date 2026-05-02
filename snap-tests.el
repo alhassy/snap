@@ -27,6 +27,9 @@
   (file-name-directory (or load-file-name buffer-file-name
                            (expand-file-name "snap-tests.el" default-directory)))))
 
+;; Define the identity-fixture test shorthand (not shipped by snap itself).
+(snap-define-fixture deftest)
+
 ;; ═══════════════════════════════════════════════════════════════════
 ;; 1. `deftest-space' -- the naming knob
 ;; ═══════════════════════════════════════════════════════════════════
@@ -99,20 +102,20 @@
   (should-not (= 1 2)))
 
 ;; ═══════════════════════════════════════════════════════════════════
-;; 3. `deftestfixture' -- macro-generating macro
+;; 3. `snap-define-fixture' -- macro-generating macro
 ;; ═══════════════════════════════════════════════════════════════════
 
 ;; A fixture that simply binds a dynamic var around BODY.
 (defvar snap-tests--fixture-flag nil)
-(deftestfixture snap-tests--with-flag
+(snap-define-fixture snap-tests--with-flag
   "Bind `snap-tests--fixture-flag' to t for the duration of BODY."
   (let ((snap-tests--fixture-flag t))
     &body))
 
-(deftest "deftestfixture registers the generated macro" [snap deftestfixture registry]
+(deftest "snap-define-fixture registers the generated macro" [snap snap-define-fixture registry]
   (should (eq (gethash 'snap-tests--with-flag snap--registry) t)))
 
-(deftest "deftestfixture splices body at &body hole" [snap deftestfixture]
+(deftest "snap-define-fixture splices body at &body hole" [snap snap-define-fixture]
   (let* ((expanded (macroexpand-1
                     '(snap-tests--with-flag "flag is set" (should snap-tests--fixture-flag))))
          (body (nthcdr 5 expanded)))
@@ -125,29 +128,29 @@
       (should (eq (car inner) 'progn))
       (should (equal (cadr inner) '(should snap-tests--fixture-flag))))))
 
-(snap-tests--with-flag "flag is set at runtime" [snap deftestfixture smoke]
+(snap-tests--with-flag "flag is set at runtime" [snap snap-define-fixture smoke]
   ;; Sanity: the fixture actually binds the flag when the test runs.
   (should snap-tests--fixture-flag))
 
-(deftest "the flag is nil outside the fixture" [snap deftestfixture smoke]
+(deftest "the flag is nil outside the fixture" [snap snap-define-fixture smoke]
   (should-not snap-tests--fixture-flag))
 
 ;; Fixture with no docstring -- docstring arg omitted, fixture is positional arg 2.
-(deftestfixture snap-tests--no-doc-fixture
+(snap-define-fixture snap-tests--no-doc-fixture
   (let ((x 1)) &body))
 
-(deftest "deftestfixture accepts a fixture without a docstring" [snap deftestfixture]
+(deftest "snap-define-fixture accepts a fixture without a docstring" [snap snap-define-fixture]
   (should (eq (gethash 'snap-tests--no-doc-fixture snap--registry) t))
   (let ((expanded (macroexpand-1
                    '(snap-tests--no-doc-fixture "no-doc case" (should (= x 1))))))
     (should (eq (car expanded) 'ert-deftest))))
 
 ;; Fixture referencing `&body' twice -- `cl-subst' must hit every occurrence.
-(deftestfixture snap-tests--double-body
+(snap-define-fixture snap-tests--double-body
   "Wrap body in a `progn' that evaluates it twice (to exercise cl-subst)."
   (progn &body &body))
 
-(deftest "deftestfixture splices &body at every occurrence" [snap deftestfixture]
+(deftest "snap-define-fixture splices &body at every occurrence" [snap snap-define-fixture]
   (let* ((expanded (macroexpand-1
                     '(snap-tests--double-body "twice" (should t))))
          (body (nth 5 expanded)))
@@ -157,33 +160,33 @@
     (should (equal (nth 1 body) '(progn (should t))))
     (should (equal (nth 2 body) '(progn (should t))))))
 
-(deftest "deftestfixture with no fixture at all acts like deftest" [snap deftestfixture]
-  (deftestfixture snap-tests--identity)
+(deftest "snap-define-fixture with no fixture at all acts like deftest" [snap snap-define-fixture]
+  (snap-define-fixture snap-tests--identity)
   (should (eq (gethash 'snap-tests--identity snap--registry) t))
   (let ((expanded (macroexpand-1
                    '(snap-tests--identity "plain" (should t)))))
     ;; No wrapping: body appears verbatim.
     (should (equal (nthcdr 5 expanded) '((should t))))))
 
-(deftest "deftestfixture redefinition replaces cleanly" [snap deftestfixture]
-  (deftestfixture snap-tests--redef "v1" (let ((v 1)) &body))
-  (deftestfixture snap-tests--redef "v2" (let ((v 2)) &body))
+(deftest "snap-define-fixture redefinition replaces cleanly" [snap snap-define-fixture]
+  (snap-define-fixture snap-tests--redef "v1" (let ((v 1)) &body))
+  (snap-define-fixture snap-tests--redef "v2" (let ((v 2)) &body))
   (let ((expanded (macroexpand-1
                    '(snap-tests--redef "check" (should (= v 2))))))
     (should (equal (cadr (nth 5 expanded)) '((v 2))))))
 
 ;; ═══════════════════════════════════════════════════════════════════
-;; 4. `define-relation' -- relational fixtures with snapshot updating
+;; 4. `snap-define-relation' -- relational fixtures with snapshot updating
 ;; ═══════════════════════════════════════════════════════════════════
 
 ;; A minimal relation used throughout section 4.
-(define-relation snap-tests--double (input expected)
+(snap-define-relation snap-tests--double (input expected)
   "EXPECTED = 2 × INPUT."
   (let ((actual (* 2 input)))
     (should (equal expected actual))
     (list :expected actual)))
 
-(deftest "define-relation generates the expected function quintet" [snap define-relation]
+(deftest "snap-define-relation generates the expected function quintet" [snap snap-define-relation]
   (should (fboundp 'snap-tests--double--check))
   (should (fboundp 'snap-tests--double--compute))
   (should (fboundp 'snap-tests--double--update-at))
@@ -191,7 +194,7 @@
   (should (fboundp 'snap-tests--double--update-by-name))
   (should (fboundp 'define-snap-tests--double-test)))
 
-(deftest "define-relation registers the test macro with :updater and :compute" [snap define-relation registry]
+(deftest "snap-define-relation registers the test macro with :updater and :compute" [snap snap-define-relation registry]
   (let ((entry (gethash 'define-snap-tests--double-test snap--registry)))
     (should (consp entry))
     (should (eq (plist-get entry :updater)
@@ -200,19 +203,19 @@
                 'snap-tests--double--compute))))
 
 (deftest "compute-fn returns the actual output plist even when the assertion fails"
-    [snap define-relation compute]
+    [snap snap-define-relation compute]
   ;; :expected 7 is wrong; without should-suppression the assertion would abort.
   ;; With `ert-fail' let-bound to `ignore' inside compute, the body runs through.
   (should (equal (snap-tests--double--compute '(:input 3 :expected 7))
                  '(:expected 6))))
 
-(deftest "check-fn raises ert-test-failed on mismatch" [snap define-relation check]
+(deftest "check-fn raises ert-test-failed on mismatch" [snap snap-define-relation check]
   (should-error (snap-tests--double--check 3 7) :type 'ert-test-failed))
 
-(deftest "check-fn passes silently on a correct snapshot" [snap define-relation check]
+(deftest "check-fn passes silently on a correct snapshot" [snap snap-define-relation check]
   (should (equal (snap-tests--double--check 3 6) '(:expected 6))))
 
-(deftest "generated test macro expands to an ert-deftest form" [snap define-relation]
+(deftest "generated test macro expands to an ert-deftest form" [snap snap-define-relation]
   (let ((expanded (macroexpand-1
                    '(define-snap-tests--double-test "three" :input 3 :expected 6))))
     (should (eq (car expanded) 'ert-deftest))
@@ -221,13 +224,13 @@
 ;; The happy and failing paths at runtime -- wrap in ert-run-tests-batch
 ;; so we observe ERT's own bookkeeping rather than raw condition signals.
 
-(define-snap-tests--double-test "happy path 2×3=6" [snap define-relation runtime]
+(define-snap-tests--double-test "happy path 2×3=6" [snap snap-define-relation runtime]
   :input 3 :expected 6)
 
-(deftest "define-relation happy-path test is registered and passes when run"
-    [snap define-relation runtime]
+(deftest "snap-define-relation happy-path test is registered and passes when run"
+    [snap snap-define-relation runtime]
   ;; `snap' interns the test via a custom-mangled symbol; we look it up by name.
-  (let ((test (ert-get-test 'snap︐define-relation︐runtime··⇨··happy·path·2×3=6)))
+  (let ((test (ert-get-test 'snap︐snap-define-relation︐runtime··⇨··happy·path·2×3=6)))
     (should (ert-test-p test))
     (let ((result (ert-run-test test)))
       (should (ert-test-passed-p result)))))
@@ -236,20 +239,20 @@
 ;; literal inputs survive splicing.  This relation takes a list and
 ;; flattens it.  If quoting were wrong, we'd see `void-variable' or
 ;; mis-evaluation at expand time.
-(define-relation snap-tests--listy (items joined)
+(snap-define-relation snap-tests--listy (items joined)
   "JOINED is ITEMS concatenated with hyphens."
   (let ((actual (mapconcat #'symbol-name items "-")))
     (should (equal joined actual))
     (list :joined actual)))
 
-(define-snap-tests--listy-test "list survives splicing" [snap define-relation regression]
+(define-snap-tests--listy-test "list survives splicing" [snap snap-define-relation regression]
     :items (a b c)
     :joined "a-b-c")
 
 (deftest "list-valued inputs round-trip through the generated macro"
-    [snap define-relation regression]
+    [snap snap-define-relation regression]
   (let ((test (ert-get-test
-               'snap︐define-relation︐regression··⇨··list·survives·splicing)))
+               'snap︐snap-define-relation︐regression··⇨··list·survives·splicing)))
     (should (ert-test-p test))
     (should (ert-test-passed-p (ert-run-test test)))))
 
@@ -261,7 +264,7 @@
 ;; `ert-debug-on-error', which is on during batch suite runs).
 
 (deftest "update-at rewrites wrong output keys in the source buffer"
-    [snap define-relation updater]
+    [snap snap-define-relation updater]
   (with-temp-buffer
     (emacs-lisp-mode)
     (insert "(define-snap-tests--double-test \"updater-rewrite-case\" :input 3 :expected 7)")
@@ -271,7 +274,7 @@
     (should (string-match-p ":expected 6" (buffer-string)))
     (should-not (string-match-p ":expected 7" (buffer-string)))))
 
-(deftest "update-at preserves surrounding content verbatim" [snap define-relation updater]
+(deftest "update-at preserves surrounding content verbatim" [snap snap-define-relation updater]
   (with-temp-buffer
     (emacs-lisp-mode)
     (insert ";; a comment before\n"
@@ -287,7 +290,7 @@
       (should (string-match-p ":expected 8"         s)))))
 
 (deftest "update-by-name locates the form across open file buffers"
-    [snap define-relation updater]
+    [snap snap-define-relation updater]
   (let ((tmp (make-temp-file "snap-test-" nil ".el")))
     (unwind-protect
         (let ((buf (find-file-noselect tmp)))
@@ -305,13 +308,13 @@
       (delete-file tmp))))
 
 (deftest "update-by-name raises user-error when the form is not found"
-    [snap define-relation updater]
+    [snap snap-define-relation updater]
   (should-error (snap-tests--double--update-by-name
                  "updater-no-such-form-anywhere-in-any-buffer")
                 :type 'user-error))
 
 ;; Multi-output relation: two keys, both should be updated.
-(define-relation snap-tests--pair (n squared cubed)
+(snap-define-relation snap-tests--pair (n squared cubed)
   "SQUARED = n² and CUBED = n³."
   (let ((a (* n n)) (b (* n n n)))
     (should (equal squared a))
@@ -319,7 +322,7 @@
     (list :squared a :cubed b)))
 
 (deftest "update-at rewrites every output key in a multi-key relation"
-    [snap define-relation updater multi-key]
+    [snap snap-define-relation updater multi-key]
   (with-temp-buffer
     (emacs-lisp-mode)
     (insert "(define-snap-tests--pair-test \"multikey-n3-case\" :n 3 :squared 0 :cubed 0)")
@@ -377,7 +380,7 @@
   ;; only *defines* the ert-deftest; the advice runs it once after.
   (should (>= snap-tests--sentinel 1)))
 
-(deftest "C-u on a define-relation form invokes the updater"
+(deftest "C-u on a snap-define-relation form invokes the updater"
     [snap advice updater]
   (let ((tmp (make-temp-file "snap-advice-" nil ".el")))
     (unwind-protect
@@ -396,11 +399,11 @@
       (delete-file tmp))))
 
 ;; ═══════════════════════════════════════════════════════════════════
-;; 6. `define-relation--show-diff' -- lightly covered
+;; 6. `snap-define-relation--show-diff' -- lightly covered
 ;; ═══════════════════════════════════════════════════════════════════
 
-(deftest "define-relation--show-diff is defined and callable" [snap show-diff]
-  (should (fboundp 'define-relation--show-diff)))
+(deftest "snap-define-relation--show-diff is defined and callable" [snap show-diff]
+  (should (fboundp 'snap-define-relation--show-diff)))
 
 (deftest "show-diff creates a *Snapshot Diff* buffer and cleans up temp files"
     [snap show-diff]
@@ -410,7 +413,7 @@
   (let ((before (seq-filter
                  (lambda (f) (string-match-p "^snapshot-\\(expected\\|actual\\)-" f))
                  (directory-files temporary-file-directory))))
-    (define-relation--show-diff "alpha\n" "beta\n")
+    (snap-define-relation--show-diff "alpha\n" "beta\n")
     (should (get-buffer "*Snapshot Diff*"))
     ;; Temp files must be deleted -- no leaks.
     (let ((after (seq-filter
@@ -423,7 +426,7 @@
 ;; 7. Integration -- end-to-end smoke
 ;; ═══════════════════════════════════════════════════════════════════
 
-(define-relation snap-tests--upcase (input expected)
+(snap-define-relation snap-tests--upcase (input expected)
   "EXPECTED is the uppercase form of INPUT."
   (let ((actual (upcase input)))
     (should (equal expected actual))
@@ -435,7 +438,7 @@
 (define-snap-tests--upcase-test "integration already upper stays upper" [snap integration]
   :input "LOUD" :expected "LOUD")
 
-(deftest "integration: define-relation tests defined at top level are runnable"
+(deftest "integration: snap-define-relation tests defined at top level are runnable"
     [snap integration]
   ;; Look each one up by its mangled symbol and run it standalone.
   (dolist (sym '(snap︐integration··⇨··integration·hello·to·HELLO
