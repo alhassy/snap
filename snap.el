@@ -64,18 +64,19 @@ The registry (`snap--registry') stores either `t' (for
 plain `deftestfixture' macros) or a plist with `:updater' (for
 `define-relation' macros).  The `:updater' function rewrites the
 output keys in the source buffer."
-  (let ((updater nil))
+  (let ((form-head nil)
+        (updater nil))
     ;; Peek at the form before eval-last-sexp moves point.
     (save-excursion
       (backward-sexp)
       (when-let* ((form (sexp-at-point))
-                  (_    (consp form))
-                  (head (car form))
-                  (entry (gethash head snap--registry)))
-        (when (and prefix-arg
-                   (consp entry)
-                   (plist-get entry :updater))
-          (setq updater (plist-get entry :updater)))))
+                  (_    (consp form)))
+        (setq form-head (car form))
+        (when-let* ((entry (gethash form-head snap--registry)))
+          (when (and prefix-arg
+                     (consp entry)
+                     (plist-get entry :updater))
+            (setq updater (plist-get entry :updater))))))
     (if updater
         ;; Intercept: update snapshot without letting eval-last-sexp
         ;; insert its result into the buffer (C-u behaviour).
@@ -83,13 +84,10 @@ output keys in the source buffer."
       ;; Normal eval.
       (apply orig-fn prefix-arg args)
       ;; After eval, auto-run the test if it's a registered form.
-      (save-excursion
-        (backward-sexp)
-        (when-let* ((form (sexp-at-point))
-                    (_    (consp form))
-                    (head (car form))
-                    (_    (gethash head snap--registry)))
-          (let ((expanded (macroexpand-1 form)))
+      (when (and form-head (gethash form-head snap--registry))
+        (save-excursion
+          (backward-sexp)
+          (let ((expanded (macroexpand-1 (sexp-at-point))))
             (when (and (consp expanded)
                        (eq (car expanded) 'ert-deftest))
               (let ((test-name (cadr expanded)))
@@ -108,6 +106,29 @@ The default is interpunct style (middle dot).  Alternatives:
   - Hyphens:     OSBE-org-source-exports
   - Snakecase:   OSBE_org_source_exports
   - Underbracket: OSBE␣org␣source␣exports")
+
+(defun snap--name-replacements ()
+  "Return the alist used to sanitise test description strings into ERT name-safe form."
+  `((" " . ,deftest-space)
+    ("`" . "") ("'" . "")
+    ("," . "︐") ("`" . "‵")
+    (";" . "︔") ("[" . "⁅") ("]" . "⁆")))
+
+(defun snap--test-name (description provided-tags)
+  "Compute the ERT test name string from DESCRIPTION and PROVIDED-TAGS."
+  (let ((replacements (snap--name-replacements)))
+    (concat
+     (if provided-tags
+         (format "%s··⇨··"
+                 (s-join "︐" (mapcar #'prin1-to-string provided-tags)))
+       "")
+     (thread-last description s-trim s-collapse-whitespace
+                  (s-replace-all replacements)))))
+
+(defun snap--method-tag (description)
+  "Extract the first word of DESCRIPTION as the auto-derived ERT tag."
+  (thread-last description s-trim (s-split " ") car
+               (s-replace-all (snap--name-replacements))))
 
 (cl-defmacro deftestfixture (name &optional docstring-or-form fixture-form)
   "Define a new test macro NAME that wraps each test body in FIXTURE-FORM.
@@ -222,24 +243,9 @@ it has to be wrapped in `(eval (quote ...))'.")
          (declare (indent defun))
          (cl-assert (stringp description) nil ,assert-msg)
          (let*
-             ((replacements
-               `((" " . ,deftest-space)
-                 ("`" . "") ("'" . "")
-                 ("," . "︐") ("`" . "‵")
-                 (";" . "︔") ("[" . "⁅") ("]" . "⁆")))
-              (provided-tags (seq--into-list (and (vectorp tags) tags)))
-              (test-name
-               (concat
-                (if provided-tags
-                    (format "%s··⇨··"
-                            (s-join "︐" (mapcar #'prin1-to-string
-                                                provided-tags)))
-                  "")
-                (thread-last description s-trim s-collapse-whitespace
-                             (s-replace-all replacements))))
-              (method-being-tested
-               (thread-last description s-trim (s-split " ") car
-                            (s-replace-all replacements)))
+             ((provided-tags (when (vectorp tags) (append tags nil)))
+              (test-name (snap--test-name description provided-tags))
+              (method-being-tested (snap--method-tag description))
               (actual-body (if (vectorp tags) body (cons tags body)))
               (wrapped-body ,wrap-expr))
            `(ert-deftest ,(intern test-name) ()
@@ -400,24 +406,9 @@ Example:
          (declare (indent defun))
          (cl-assert (stringp description) nil ,assert-msg)
          (let*
-             ((replacements
-               `((" " . ,deftest-space)
-                 ("`" . "") ("'" . "")
-                 ("," . "︐") ("`" . "‵")
-                 (";" . "︔") ("[" . "⁅") ("]" . "⁆")))
-              (provided-tags (seq--into-list (and (vectorp tags) tags)))
-              (test-name
-               (concat
-                (if provided-tags
-                    (format "%s··⇨··"
-                            (s-join "︐" (mapcar #'prin1-to-string
-                                                provided-tags)))
-                  "")
-                (thread-last description s-trim s-collapse-whitespace
-                             (s-replace-all replacements))))
-              (method-being-tested
-               (thread-last description s-trim (s-split " ") car
-                            (s-replace-all replacements)))
+             ((provided-tags (when (vectorp tags) (append tags nil)))
+              (test-name (snap--test-name description provided-tags))
+              (method-being-tested (snap--method-tag description))
               (actual-plist (if (vectorp tags) plist-body (cons tags plist-body)))
               ;; Bind function symbols so the inner backquote can
               ;; reference them with a single comma (,--check-fn)
