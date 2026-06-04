@@ -38,6 +38,7 @@
 (require 'ert)
 (require 's)
 (require 'seq)
+(require 'fancy-C-x-C-e)
 
 ;; magit is optional: used only for pretty diffs in `snap-define-relation--show-diff'.
 ;; Declare the two functions we call so the byte-compiler does not warn.
@@ -45,57 +46,14 @@
 (declare-function magit-diff-wash-diffs "magit-diff" (args &optional limit))
 
 ;; ═══════════════════════════════════════════════════════════════════
-;; Registry and eval-last-sexp advice
+;; C-x C-e extensions (via fancy-C-x-C-e)
 ;; ═══════════════════════════════════════════════════════════════════
-
-(defvar snap--registry (make-hash-table :test 'eq)
-  "Registry of macros defined via `snap-define-fixture' or `snap-define-relation'.
-Used by `snap--eval-last-sexp' to detect when `C-x C-e' is invoked
-on a test form, enabling eval-and-run in one keystroke.")
-
-(defun snap--eval-last-sexp (orig-fn raw-prefix-arg &rest args)
-  "Around `eval-last-sexp': detect `snap-define-fixture'-registered forms.
-
-Plain `C-x C-e' → eval the form, then immediately run the test.
-`C-u C-x C-e' on a `snap-define-relation'-generated test → update the
-snapshot output keys instead of evaluating.  Magit then shows the
-diff of old vs new snapshot.
-
-The registry (`snap--registry') stores either t (for plain
-`snap-define-fixture' macros) or a plist with :updater (for
-`snap-define-relation' macros).  The :updater function rewrites the
-output keys in the source buffer."
-  (let ((form-head nil)
-        (updater nil))
-    ;; Peek at the form before eval-last-sexp moves point.
-    (save-excursion
-      (backward-sexp)
-      (when-let* ((form (sexp-at-point))
-                  (_    (consp form)))
-        (setq form-head (car form))
-        (when-let* ((entry (gethash form-head snap--registry)))
-          (when (and raw-prefix-arg
-                     (consp entry)
-                     (plist-get entry :updater))
-            (setq updater (plist-get entry :updater))))))
-    (if updater
-        ;; Intercept: update snapshot without letting eval-last-sexp
-        ;; insert its result into the buffer (C-u behaviour).
-        (funcall updater)
-      ;; Normal eval.
-      (apply orig-fn raw-prefix-arg args)
-      ;; After eval, auto-run the test if it's a registered form.
-      (when (and form-head (gethash form-head snap--registry))
-        (save-excursion
-          (backward-sexp)
-          (let ((expanded (macroexpand-1 (sexp-at-point))))
-            (when (and (consp expanded)
-                       (eq (car expanded) 'ert-deftest))
-              (let ((test-name (cadr expanded)))
-                (message "Running test: %s" test-name)
-                (ert test-name)))))))))
-
-(advice-add #'eval-last-sexp :around #'snap--eval-last-sexp)
+;;
+;; Each macro defined by `snap-define-fixture' / `snap-define-relation'
+;; registers a C-x C-e extension via `fancy-C-x-C-e-register'.  The
+;; extensions are installed at macro-definition time (inside the
+;; `snap-define-fixture' / `snap-define-relation' bodies below) so
+;; they exist as soon as the user evaluates the fixture declaration.
 
 ;; ═══════════════════════════════════════════════════════════════════
 ;; snap-define-fixture — macro-generating macro for test fixtures
@@ -236,7 +194,13 @@ it has to be wrapped in `(eval (quote ...))'.")
                           ',fixture-form))
             'actual-body)))
     `(progn
-       (puthash ',name t snap--registry)
+       (fancy-C-x-C-e-register ',name
+         (lambda (form)
+           (let ((expanded (macroexpand-1 form)))
+             (when (and (consp expanded)
+                        (eq (car expanded) 'ert-deftest))
+               (message "Running test: %s" (cadr expanded))
+               (ert (cadr expanded))))))
        (cl-defmacro ,name (description &optional tags &rest body)
          ,docstring
          (declare (indent defun))
@@ -280,6 +244,26 @@ and magit keybindings.  Falls back to plain diff output otherwise."
       (delete-file file-b)
       (pop-to-buffer buf))))
 
+(defun snap-equal-modulo (expected actual patterns)
+  "Non-nil iff EXPECTED and ACTUAL are `equal' after each regex in
+PATTERNS is replaced with a sentinel in both strings.
+
+PATTERNS may be a single regex string or a list of them.  Every
+match of every regex in each argument is collapsed to the same
+sentinel before comparison, so drifting substrings (timestamps,
+UUIDs, random IDs) are neutralised.  When EXPECTED or ACTUAL is
+not a string, falls back to plain `equal'."
+  (if (and (stringp expected) (stringp actual))
+      (let* ((pats (if (listp patterns) patterns (list patterns)))
+             (sentinel "\0SNAP-MODULO\0")
+             (norm (lambda (s)
+                     (cl-reduce
+                      (lambda (acc re)
+                        (replace-regexp-in-string re sentinel acc))
+                      pats :initial-value s))))
+        (equal (funcall norm expected) (funcall norm actual)))
+    (equal expected actual)))
+
 (cl-defmacro snap-define-relation (name params docstring &rest body)
   "Define a relational test fixture named NAME with PARAMS.
 
@@ -292,6 +276,10 @@ plumbing automatically.
 
 NAME is a symbol (e.g., `work-item').  The generated test macro
 is `define-NAME-test'; the internal checker is `NAME--check'.
+Every generated test is automatically tagged with NAME, so you
+can run the whole relation with:
+
+  M-x ert RET (tag work-item) RET
 
 PARAMS is a list of symbols.  Each becomes a keyword argument in
 the generated test macro (`:stack', `:results-in', etc.).  The
@@ -320,13 +308,14 @@ Example:
       (should (equal expected-output actual))
       (list :expected-output actual)))
 
-  ;; Generates `define-widget-test':
-  (define-widget-test \"round-trip preserves data\" [widget]
+  ;; Generates `define-widget-test'; run all widget tests with:
+  ;;   M-x ert RET (tag widget) RET
+  (define-widget-test \"round-trip preserves data\"
     :input \"hello\"
     :expected-output \"HELLO\")
 
   ;; C-u C-x C-e rewrites :expected-output from actual."
-  (declare (indent 3))
+  (declare (indent defun))
   (let* ((check-fn    (intern (format "%s--check" name)))
          (compute-fn  (intern (format "%s--compute" name)))
          (update-at   (intern (format "%s--update-at" name)))
@@ -366,10 +355,21 @@ Example:
                         (backward-sexp)
                         (delete-region (point) end)
                         (insert (prin1-to-string val))))
-             ;; Re-eval and run.
+             ;; Re-eval the updated form and run the generated ERT test.
+             ;; We eval the sexp directly (not via eval-last-sexp) to avoid
+             ;; re-triggering the fancy-C-x-C-e dispatch.  "Test redefined"
+             ;; errors are suppressed since we intentionally re-register the
+             ;; updated snapshot values.
              (goto-char form-start)
-             (forward-sexp)
-             (eval-last-sexp nil)
+             (let* ((updated-form (sexp-at-point))
+                    (expanded (macroexpand-1 updated-form)))
+               (condition-case nil
+                   (eval updated-form t)
+                 (error nil))           ; ignore ERT "test redefined" noise
+               (when (and (consp expanded)
+                          (eq (car expanded) 'ert-deftest))
+                 (message "Running test: %s" (cadr expanded))
+                 (ert (cadr expanded))))
              (message "Snapshot updated."))))
 
        (defun ,update-fn ()
@@ -430,7 +430,7 @@ Example:
                             collect k)
                  (error nil))))
            `(ert-deftest ,(intern test-name) ()
-              :tags ',(cons method-being-tested provided-tags)
+              :tags ',(cl-list* ',name method-being-tested provided-tags)
               ;; Happy path: check-fn runs should internally.
               ;; On failure: catch it, compute actual outputs, re-assert
               ;; with ert-info buttons for [Show Diff] / [Update Snapshot].
@@ -464,11 +464,18 @@ Example:
                                ""))
                          (should (equal ,expected (plist-get --outputs ,kw)))))))))))
 
-       ;; -- 5. Registry entry with metadata --
-       (puthash ',test-macro
-                (list :updater #',update-fn
-                      :compute #',compute-fn)
-                snap--registry))))
+       ;; -- 5. Register C-x C-e extension via fancy-C-x-C-e --
+       ;; Plain C-x C-e → eval the form, expand it, run the ERT test.
+       ;; C-u   C-x C-e → update the snapshot (rewrite output keys).
+       (fancy-C-x-C-e-register ',test-macro
+         (lambda (form)
+           (if current-prefix-arg
+               (funcall #',update-fn)
+             (let ((expanded (macroexpand-1 form)))
+               (when (and (consp expanded)
+                          (eq (car expanded) 'ert-deftest))
+                 (message "Running test: %s" (cadr expanded))
+                 (ert (cadr expanded))))))))))
 
 (provide 'snap)
 ;;; snap.el ends here

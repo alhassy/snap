@@ -98,8 +98,8 @@
 (deftest "deftest signals cl-assert on non-string description" [snap deftest validation]
   (should-error (macroexpand-1 '(deftest 42 (should t)))))
 
-(deftest "deftest is registered in snap--registry" [snap deftest registry]
-  (should (eq (gethash 'deftest snap--registry) t)))
+(deftest "deftest is registered with fancy-C-x-C-e" [snap deftest registry]
+  (should (fancy-C-x-C-e-registered-p 'deftest)))
 
 (deftest "deftest bodies are run -- should fires as expected" [snap deftest smoke]
   ;; If this test body were ignored, the failing `should' below would pass.
@@ -118,7 +118,7 @@
     &body))
 
 (deftest "snap-define-fixture registers the generated macro" [snap snap-define-fixture registry]
-  (should (eq (gethash 'snap-tests--with-flag snap--registry) t)))
+  (should (fancy-C-x-C-e-registered-p 'snap-tests--with-flag)))
 
 (deftest "snap-define-fixture splices body at &body hole" [snap snap-define-fixture]
   (let* ((expanded (macroexpand-1
@@ -145,7 +145,7 @@
   (let ((x 1)) &body))
 
 (deftest "snap-define-fixture accepts a fixture without a docstring" [snap snap-define-fixture]
-  (should (eq (gethash 'snap-tests--no-doc-fixture snap--registry) t))
+  (should (fancy-C-x-C-e-registered-p 'snap-tests--no-doc-fixture))
   (let ((expanded (macroexpand-1
                    '(snap-tests--no-doc-fixture "no-doc case" (should (= x 1))))))
     (should (eq (car expanded) 'ert-deftest))))
@@ -167,7 +167,7 @@
 
 (deftest "snap-define-fixture with no fixture at all acts like deftest" [snap snap-define-fixture]
   (snap-define-fixture snap-tests--identity)
-  (should (eq (gethash 'snap-tests--identity snap--registry) t))
+  (should (fancy-C-x-C-e-registered-p 'snap-tests--identity))
   (let ((expanded (macroexpand-1
                    '(snap-tests--identity "plain" (should t)))))
     ;; No wrapping: body appears verbatim.
@@ -199,13 +199,11 @@
   (should (fboundp 'snap-tests--double--update-by-name))
   (should (fboundp 'define-snap-tests--double-test)))
 
-(deftest "snap-define-relation registers the test macro with :updater and :compute" [snap snap-define-relation registry]
-  (let ((entry (gethash 'define-snap-tests--double-test snap--registry)))
-    (should (consp entry))
-    (should (eq (plist-get entry :updater)
-                'snap-tests--double--update))
-    (should (eq (plist-get entry :compute)
-                'snap-tests--double--compute))))
+(deftest "snap-define-relation registers the test macro with fancy-C-x-C-e" [snap snap-define-relation registry]
+  (should (fancy-C-x-C-e-registered-p 'define-snap-tests--double-test))
+  ;; The compute and update functions are still bound as plain defuns.
+  (should (fboundp 'snap-tests--double--compute))
+  (should (fboundp 'snap-tests--double--update)))
 
 (deftest "compute-fn returns the actual output plist even when the assertion fails"
     [snap snap-define-relation compute]
@@ -341,11 +339,11 @@
 ;; 5. The `eval-last-sexp' advice
 ;; ═══════════════════════════════════════════════════════════════════
 
-(deftest "advice snap--eval-last-sexp is installed on eval-last-sexp"
+(deftest "fancy-C-x-C-e--dispatch advice is installed on eval-last-sexp"
     [snap advice]
   (let ((found nil))
     (advice-mapc (lambda (fn _props)
-                   (when (eq fn 'snap--eval-last-sexp)
+                   (when (eq fn #'fancy-C-x-C-e--dispatch)
                      (setq found t)))
                  'eval-last-sexp)
     (should found)))
@@ -397,7 +395,12 @@
                 (save-buffer)
                 (goto-char (point-max))
                 ;; Non-nil prefix-arg triggers the updater path.
-                (eval-last-sexp 4)
+                ;; Bind current-prefix-arg rather than passing 4 to
+                ;; eval-last-sexp, so the result isn't also inserted
+                ;; into the buffer (which would corrupt it for the
+                ;; updater).
+                (let ((current-prefix-arg 4))
+                  (eval-last-sexp nil))
                 (should (string-match-p ":expected 14" (buffer-string))))
             (with-current-buffer buf (set-buffer-modified-p nil))
             (kill-buffer buf)))
