@@ -224,6 +224,12 @@
     (should (eq (car expanded) 'ert-deftest))
     (should (eq (nth 1 expanded) 'three))))
 
+(deftest "a failing relation test reports the mismatch, not a void-variable from its [Show Diff] button"
+    [snap snap-define-relation runtime]
+  ;; We run the expansion's body directly, so this deliberately failing test is never registered.
+  (let ((body (nthcdr 5 (macroexpand-1 '(define-snap-tests--double-test "sad" :input 3 :expected 7)))))
+    (should-error (eval `(progn ,@body) t) :type 'ert-test-failed)))
+
 ;; The happy and failing paths at runtime -- wrap in ert-run-tests-batch
 ;; so we observe ERT's own bookkeeping rather than raw condition signals.
 
@@ -454,5 +460,165 @@
     (let ((test (ert-get-test sym)))
       (should (ert-test-p test))
       (should (ert-test-passed-p (ert-run-test test))))))
+
+
+;; ═══════════════════════════════════════════════════════════════════
+;; 8. snap-doctest --- inline doctests from fenced blocks
+;; ═══════════════════════════════════════════════════════════════════
+
+(load-file
+ (expand-file-name
+  "snap-doctest.el"
+  (file-name-directory (or load-file-name buffer-file-name
+                           (expand-file-name "snap-tests.el" default-directory)))))
+
+;; ── snap-doctest--parse-fences ────────────────────────────────────
+
+(deftest "parse-fences returns nil for a string with no fences"
+    [snap snap-doctest parse-fences]
+  (should (null (snap-doctest--parse-fences "no fences here"))))
+
+(deftest "parse-fences returns nil for nil input"
+    [snap snap-doctest parse-fences]
+  (should (null (snap-doctest--parse-fences nil))))
+
+(deftest "parse-fences extracts one pair from a single fence"
+    [snap snap-doctest parse-fences]
+  (let ((pairs (snap-doctest--parse-fences "```\n(+ 1 1) => 2\n```")))
+    (should (= (length pairs) 1))
+    (should (equal (car (car pairs)) "(+ 1 1)"))
+    (should (equal (cdr (car pairs)) "2"))))
+
+(deftest "parse-fences extracts multiple pairs from one fence"
+    [snap snap-doctest parse-fences]
+  (let ((pairs (snap-doctest--parse-fences
+                "```\n(+ 1 1) => 2\n(* 3 4) => 12\n```")))
+    (should (= (length pairs) 2))
+    (should (equal (car (nth 0 pairs)) "(+ 1 1)"))
+    (should (equal (car (nth 1 pairs)) "(* 3 4)"))))
+
+(deftest "parse-fences handles multiple fences in one string"
+    [snap snap-doctest parse-fences]
+  (let ((pairs (snap-doctest--parse-fences
+                "first ```\n(+ 1 1) => 2\n``` middle ```\n(not t) => nil\n```")))
+    (should (= (length pairs) 2))))
+
+(deftest "parse-fences ignores lines inside a fence with no =>"
+    [snap snap-doctest parse-fences]
+  (let ((pairs (snap-doctest--parse-fences
+                "```\nsome narrative text\n(+ 1 1) => 2\nmore text\n```")))
+    (should (= (length pairs) 1))))
+
+(deftest "parse-fences trims whitespace around X and Y"
+    [snap snap-doctest parse-fences]
+  (let ((pair (car (snap-doctest--parse-fences
+                    "```\n   (+ 1 1)   =>   2   \n```"))))
+    (should (equal (car pair) "(+ 1 1)"))
+    (should (equal (cdr pair) "2"))))
+
+;; ── snap-doctest-on-string ────────────────────────────────────────
+
+(deftest "snap-doctest-on-string expands to a progn of should forms"
+    [snap snap-doctest on-string]
+  (let ((expanded (macroexpand-1
+                   '(snap-doctest-on-string "```\n(+ 1 1) => 2\n```"))))
+    (should (eq (car expanded) 'progn))
+    ;; One assertion inside the progn.
+    (should (= (length (cdr expanded)) 1))
+    (let ((assertion (cadr expanded)))
+      (should (eq (car assertion) 'should)))))
+
+(deftest "snap-doctest-on-string expands to bare progn for a fenceless string"
+    [snap snap-doctest on-string]
+  (let ((expanded (macroexpand-1
+                   '(snap-doctest-on-string "no fences"))))
+    (should (equal expanded '(progn)))))
+
+(deftest "snap-doctest-on-string assertions pass for correct pairs"
+    [snap snap-doctest on-string smoke]
+  (snap-doctest-on-string "```\n(+ 1 1) => 2\n(* 3 4) => 12\n(not nil) => t\n```"))
+
+(deftest "snap-doctest-on-string wraps each assertion in ert-info when label given"
+    [snap snap-doctest on-string]
+  (let ((expanded (macroexpand-1
+                   '(snap-doctest-on-string "```\n(+ 1 1) => 2\n```" "my-fn"))))
+    (let ((assertion (cadr expanded)))
+      (should (eq (car assertion) 'ert-info)))))
+
+;; ── snap-doctest #'fn ─────────────────────────────────────────────
+
+(defun snap-tests--doctest-example (x)
+  "Triple X.
+
+```
+(snap-tests--doctest-example 3) => 9
+(snap-tests--doctest-example 0) => 0
+```"
+  (* 3 x))
+
+(deftest "snap-doctest #'fn runs the docstring's fenced assertions"
+    [snap snap-doctest function]
+  (snap-doctest #'snap-tests--doctest-example))
+
+(deftest "snap-doctest 'fn also works with a plain quote"
+    [snap snap-doctest function]
+  (snap-doctest 'snap-tests--doctest-example))
+
+(deftest "snap-doctest expands to a runtime let form for #'fn"
+    [snap snap-doctest function]
+  (let ((expanded (macroexpand-1 '(snap-doctest #'snap-tests--doctest-example))))
+    (should (eq (car expanded) 'let*))))
+
+(deftest "snap-doctest signals error for a function with no docstring"
+    [snap snap-doctest function]
+  (defun snap-tests--no-doc () nil)
+  (should-error (snap-doctest #'snap-tests--no-doc)))
+
+;; ── snap-doctest "file.el" ────────────────────────────────────────
+
+(deftest "snap-doctest scans a file and runs all fenced doctests"
+    [snap snap-doctest file]
+  (let ((tmp (make-temp-file "snap-doctest-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert
+             "(defun snap-tests--file-triple (x)\n"
+             "  \"Triple X.\n\n"
+             "```\n"
+             "(snap-tests--file-triple 4) => 12\n"
+             "(snap-tests--file-triple 1) => 3\n"
+             "```\"\n"
+             "  (* 3 x))\n"))
+          ;; Load the temp file so the function is defined.
+          (load-file tmp)
+          ;; snap-doctest on the file path should pass without error.
+          (snap-doctest-on-string
+           (concat "```\n"
+                   "(snap-tests--file-triple 4) => 12\n"
+                   "(snap-tests--file-triple 1) => 3\n"
+                   "```")))
+      (delete-file tmp))))
+
+(deftest "snap-doctest--extract-file-strings returns pairs for documented forms"
+    [snap snap-doctest file]
+  (let ((tmp (make-temp-file "snap-doctest-extract-" nil ".el")))
+    (unwind-protect
+        (progn
+          (with-temp-file tmp
+            (insert
+             "(defun snap-tests--extract-fn (x)\n"
+             "  \"Do something.\n\n"
+             "```\n(+ 1 2) => 3\n```\"\n"
+             "  x)\n"
+             "(defvar snap-tests--extract-var nil\n"
+             "  \"A var.\n\n"
+             "```\n(+ 2 3) => 5\n```\")\n"))
+          (let ((pairs (snap-doctest--extract-file-strings tmp)))
+            (should (= (length pairs) 2))
+            ;; Each pair is (docstring . label); both docstrings have fences.
+            (should (snap-doctest--parse-fences (car (nth 0 pairs))))
+            (should (snap-doctest--parse-fences (car (nth 1 pairs))))))
+      (delete-file tmp))))
 
 ;;; snap-tests.el ends here

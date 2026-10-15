@@ -15,7 +15,44 @@
 
 ;;; Commentary:
 ;;
-;; Snapshot testing infrastructure for ERT.  Three layers:
+;; Snapshot testing infrastructure for ERT.  Three layers, plus an
+;; optional doctest layer (`snap-doctest.el').  The full progression
+;; from "one example in a docstring" to "a full snapshot test file":
+;;
+;;   ┌─────────────────────────────────────────────────────────────────┐
+;;   │  Write a docstring with a fenced example                        │
+;;   │                                                                 │
+;;   │    (defun double (x) "2× X.                                     │
+;;   │    ```                                                          │
+;;   │    (double 3) => 6                                              │
+;;   │    ```"  (* 2 x))                                               │
+;;   │                          │                                      │
+;;   │                          ▼  snap-doctest                        │
+;;   │  Run as an ERT test ---one line in any ert-deftest              │
+;;   │                                                                 │
+;;   │    (deftest "double doctests" (snap-doctest #'double))          │
+;;   │                          │                                      │
+;;   │                          │  too many examples for one docstring │
+;;   │                          ▼  → move to a dedicated test file     │
+;;   │                                                                 │
+;;   │  snap-define-fixture / deftest --- everyday unit tests          │
+;;   │                                                                 │
+;;   │    (deftest "double 3" (should (= (double 3) 6)))               │
+;;   │                          │                                      │
+;;   │                          │  expected value is complex /         │
+;;   │                          │  drifts when the function changes    │
+;;   │                          ▼  → let snap maintain the snapshot    │
+;;   │                                                                 │
+;;   │  snap-define-relation --- C-u C-x C-e auto-fills :expected      │
+;;   │                                                                 │
+;;   │    (define-double-test "small" :input 3 :expected 6)            │
+;;   └─────────────────────────────────────────────────────────────────┘
+;;
+;; The layers in brief:
+;;
+;; 0. `snap-doctest' (snap-doctest.el) — extract `X => Y' assertions
+;;    from ```...``` fenced blocks in any docstring or string literal.
+;;    Zero-ceremony: examples live right next to the code they document.
 ;;
 ;; 1. `snap-define-fixture' — macro-generating macro.  Wraps test bodies in
 ;;    a fixture (setup/teardown), generates a test macro with
@@ -446,19 +483,21 @@ Example:
                       for expected = (plist-get actual-plist kw)
                       collect
                       `(ert-info
+                           ;; This backquote runs with the test, so macro-time values are spliced
+                           ;; via ,', and runtime ones ---the actual output--- via a lone comma.
                            (`(lambda ()
-                               (when (stringp ,expected)
+                               (when (stringp ',',expected)
                                  (insert-button "[Show Diff]"
                                                 'action (lambda (_)
                                                           (snap-define-relation--show-diff
-                                                           ,expected
-                                                           (plist-get --outputs ,kw)))
+                                                           ',',expected
+                                                           ',(plist-get --outputs ,kw)))
                                                 'follow-link t
                                                 'help-echo "Show diff of expected vs actual")
                                  (insert "  "))
                                (insert-button "[Update Snapshot]"
                                               'action (lambda (_)
-                                                        (funcall ',--update-by ,description))
+                                                        (funcall ',',--update-by ,',description))
                                               'follow-link t
                                               'help-echo "Rewrite output keys in source")
                                ""))

@@ -1,0 +1,171 @@
+
+* TODO fortified string literals
+:PROPERTIES:
+:CREATED:  [2026-06-04 Thu 09:28]
+:END:
+1. [ ] Let's explore org-like fontification within string literals!
+
+   Let's make a new repo ~/fontified-docstrings whose purpose is to empower
+   users to write better docstrings by having their docstrings look nicer in the
+   source. E.g., 
+
+   1. If I write Org-markup: *bold*, _underline_, /italics/ then I'd like
+      the markup to look nice in the string literals.
+
+   2. If I write “* some title” then we fontify that line bigger then the others
+      since it denotes an org-mode section, likewise for “** subsection” and
+      “*** sub-sub-section”.
+
+   3. If I have an enumeration:
+
+      + first
+      + second
+      + third
+
+      Then fontify the “+” to be “⇒”.
+      If I use “-” instead, then fontify it as “↳”.
+      
+   4. If a user writes ```...```` then the ...` is a code block and should be
+      fontified in a monospace font. If a language is specified ```emacs-lisp
+      then we should fontify that code block as if it were emacs lisp.
+
+      Moreover, after the ```<lang> let's have an overlay [Run] so that
+      users can press it to actually run the source block!
+
+      Perhaps this will encourage users to write usage examples in docstrings!
+               
+      
+* Misc
+
+Here's a simple example, maybe mention in README
+
+;; This is essentially (should (equals (𝒇 given) expected))
+;; however we automatically get Emacs to insert the value of `expected` for us 😁
+(snap-define-relation upcase (given expect)
+  "Checks that: (upcase GIVEN) = EXPECT .
+
+`C-u C-x C-e' auto-fills :expect from the actual result, provided :given is present."
+  (let ((actual (upcase (eval given))))
+    (should (equal expect actual))
+    (list :expect actual)))
+
+
+TODO:
+1. I cannot do `C-u C-x C-e` on just (define-upcase-test :given "hello"),
+   it seems I need a `:expected nil` to be present? That's trash! It should work
+   regardless!
+2. It seems define-upcase-test does not indent nicely?!
+
+   I want indentation
+
+   (define-upcase-test "details here"
+   :given ...
+   :expected ...)
+
+   and not:
+
+   (define-upcase-test "details here"
+                       :given ...
+                       :expected ...)
+3. Some people might not like the default naming: (define-relation 𝑹 …) ↦
+   define-𝑹-test. Maybe we can expose an optional key to override the generated
+   name? E.g.,
+   (define-relation (named my-𝑹-test) …) so that the preence of `named'
+   means we generate `my-𝑹-test` instead of `define-𝑹-test.
+   
+* TODO (Super fun idea) Write OrgSpefialBlockExyras E2E framework     :Email:
+:PROPERTIES:
+:CREATED: [2024-11-01 Fri 11:49]
+:ACTUAL_EMAIL: [[elisp:(my/search-email "(Super.*fun.*idea).*Write.*OrgSpefialBlockExyras.*E2E.*framework")][(Super fun idea) Write OrgSpefialBlockExyras E2E framework]]
+:END:
+
+From: Musa Al-hassy <alhassy@gmail.com>
+Subject: (Super fun idea) Write OrgSpefialBlockExyras E2E framework
+To: Musa Al-hassy <alhassy@gmail.com>
+Date: Fri, 25 Oct 2024 19:24:53 -0400 (6 days, 16 hours, 24 minutes ago)
+Attachment: [2. text/plain]...
+
+Read a yaml file with key "src", and emit keys "html" and "latex" and whatever else backends I want to actively support.
+
+Such tests are the human readable examples!
+
+Have them be in a tests/ directory.
+
+Finally, create a E2E block type whose purpose is to produce nice HTML showing what the user writes and what it looks like in actual rendered
+HTML. This is similar to my org-src block.
+
+Finally, if this E2E idea is sufficiently generic, use it for holy-books mode and LF.el maybe 🤔
+
+* STARTED [#B] getting snap.el ready for melpa
+:PROPERTIES:
+:CREATED:  [2026-05-02 Sat 10:50]
+:END:
+** DONE improved names
+CLOSED: [2026-05-02 Sat 13:19]
+:PROPERTIES:
+:CREATED:  [2026-05-02 Sat 10:50]
+:END:
+
+*Context:* =~/snap/snap.el= is a snapshot-testing framework for Emacs
+Lisp built on ERT. It has three user-facing macros that need renaming
+for MELPA compliance:
+
+- =deftestfixture= → =snap-define-fixture=
+- =define-relation= → =snap-define-relation=
+- =deftest= --- move it OUT of =snap.el= entirely (it's a convenience
+  wrapper, not core infrastructure)
+
+*Tasks:*
+
+1. *Rename in =~/snap/snap.el=:*
+   - =deftestfixture= → =snap-define-fixture= (update definition + all
+     internal uses)
+   - =define-relation= → =snap-define-relation= (update definition + all
+     internal uses)
+   - Remove =deftest= from =snap.el= entirely. In the docstring of
+     =snap-define-fixture=, mention that users typically define their
+     own =deftest= shorthand via =(snap-define-fixture deftest ...)= ---
+     see README note below.
+2. *Update all call sites* --- grep and fix every use of the old names
+   in:
+   - =~/.emacs.d/init.org=
+   - =~/easy-access/= (all =.el= and test files)
+   - =~/org-special-block-extras/= (all =.el= and test files)
+   - =~/define-org-agenda-section/= (all =.el= and test files)
+   - =~/snap/= itself (snap-tests.el, README.org, etc.)
+3. *Update =~/snap/README.org=:* Right after the installation
+   instructions, add a section suggesting:
+
+#+begin_src elisp
+;; Define a convenience test macro (no mangled names — readable ERT output!)
+(snap-define-fixture deftest)
+#+end_src
+
+With a comment explaining: this is a user-defined shorthand built on
+=snap-define-fixture=; unlike raw =ert-deftest=, test names are not
+mangled and read exactly as written.
+
+4. [@4] *Run the snap test suite* (=(ert-run-tests-batch "snap")=) and
+   confirm all tests pass after the rename.
+
+5. *Commit* each repo separately with a message reflecting the rename.
+** STARTED Run /melpa command
+:PROPERTIES:
+:CREATED:  [2026-05-02 Sat 10:51]
+:END:
+
+
+/melpa ~/snap
+
+I want to get ready to submit this to melpa, “testing is a snap 🫰”
+
+TODO: Make a gif demoing snap-define-relation
+
+TODO: Ask claude for real-world uses cases of snap-define-relation
+
+(eg org-special-block-extras, regex engine, PL tooling, add a link to
+[[https://giacomocavalieri.me/writing/testing-can-be-fun-actually][Testing can be fun, actually]]!) 
+** mention relationship to rdd.el (eg how this approach codifies REPL sessions)
+:PROPERTIES:
+:CREATED:  [2026-05-02 Sat 13:29]
+:END:

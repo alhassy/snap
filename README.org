@@ -76,13 +76,59 @@ fixture macros that are one line to declare, and snapshot tests whose
 expectations you refresh with ~C-u C-x C-e~ — no separate runner, no
 external framework, just ERT with the dull edges sanded off.
 
+#+begin_src latex-as-png :file snap-doctest-flow.png :resolution "720" :results raw value replace :exports results
+\usepackage{smartdiagram}
+\usepackage{graphicx}
+\usepackage{xcolor}
+
+\vspace{1.5em}
+\centering{The testing progression: from a fenced docstring example\\
+to a dedicated test file to a self-updating snapshot}
+
+\vspace{1em}
+\smartdiagramset{
+  set color list={black!75, black!60, black!50, black!40},
+  back arrow disabled=false,
+  uniform arrow color=true,
+  arrow color=gray!70,
+  arrow line width=0.08cm,
+  text width=5.5cm,
+  module minimum width=5.5cm,
+  module minimum height=1.4cm,
+  module x sep=7cm,
+  font=\small\sffamily,
+  text color=white
+}
+\resizebox{0.98\textwidth}{!}{%
+\smartdiagram[flow diagram:horizontal]{%
+  {{\normalfont\bfseries snap-doctest}\\[0.3em]
+   \texttt{X => Y} assertions\\inside \texttt{```} fenced blocks\\
+   in any docstring},
+  {{\normalfont\bfseries deftest}\\[0.3em]
+   plain unit tests in a\\dedicated \texttt{*-tests.el}\\
+   when examples multiply},
+  {{\normalfont\bfseries snap-define-fixture}\\[0.3em]
+   bake setup/teardown\\into a one-line\\fixture declaration},
+  {{\normalfont\bfseries snap-define-relation}\\[0.3em]
+   \texttt{C-u C-x C-e} auto-fills\\
+   \texttt{:expected} from the\\
+   actual computed value}
+}}
+\vspace{0.5em}
+{\small\textcolor{black!55}{Each step to the right adds power; each step to the left stays closer to the documentation.}}
+#+end_src
+
+#+RESULTS:
+[[file:snap-doctest-flow.png]]
+
 * What snap gives us
 
-| Layer                 | What it is                              | When to reach for it            |
-|-----------------------+-----------------------------------------+---------------------------------|
-| ~deftest~             | identity fixture (no wrapping)          | everyday unit tests             |
-| ~snap-define-fixture~      | macro-generating macro for fixtures     | recurring setup/teardown        |
-| ~snap-define-relation~     | declarative input ⟶ output snapshots    | golden-file / example-based     |
+| Layer                  | What it is                              | When to reach for it                   |
+|------------------------+-----------------------------------------+----------------------------------------|
+| ~snap-doctest~         | runnable ~X => Y~ examples in docstrings | start here — zero ceremony             |
+| ~deftest~              | identity fixture (no wrapping)          | everyday unit tests                    |
+| ~snap-define-fixture~  | macro-generating macro for fixtures     | recurring setup/teardown               |
+| ~snap-define-relation~ | declarative input ⟶ output snapshots    | golden-file / auto-updating snapshots  |
 
 All three generate ordinary ~ert-deftest~ forms under the hood — so
 ~M-x ert~, ~ert-run-tests-batch~, the ERT buffer, tag filtering, and
@@ -356,6 +402,60 @@ This is the shape of every interesting ~snap-define-relation~ use:
 multiple assertions, structured output, and a refresh gesture that
 costs one chord.
 
+** ~snap-doctest~ — runnable examples inside docstrings
+
+*The problem.*  A new function's very first "test" is usually the
+example in its docstring.  You write it so readers understand what the
+function does; but it just sits there, uncheckable, silently drifting
+out of sync the moment the implementation changes.
+
+*What ~snap-doctest~ does.*  Any docstring (or string literal) may
+contain one or more `` ``` `` fenced blocks.  Every line inside a fence
+that matches ~X => Y~ becomes a live ERT assertion --- ~(should (equal
+Y X))~.  The assertions run inside a normal ~ert-deftest~, so every
+piece of ERT infrastructure (failure display, tag filtering, batch
+runs) works unchanged.
+
+By way of example:
+
+#+begin_src emacs-lisp
+(defun my-double (x)
+  "Return 2 × X.
+
+\`\`\`
+(my-double 3) => 6
+(my-double 0) => 0
+(my-double -1) => -2
+\`\`\`"
+  (* 2 x))
+#+end_src
+
+Wire up the doctests in one line:
+
+#+begin_src emacs-lisp
+(deftest "my-double passes its inline doctests" [my-double]
+  (snap-doctest #'my-double))
+#+end_src
+
+Three entry points cover the whole range from "one function" to "an
+entire file":
+
+| Entry point                           | What it tests                                        |
+|---------------------------------------+------------------------------------------------------|
+| ~(snap-doctest #'fn)~                 | the docstring of a single function/macro/variable    |
+| ~(snap-doctest-on-string "…")~        | any literal string (macro, expands at compile time)  |
+| ~(snap-doctest "path/to/file.el")~    | every documented form in the file                    |
+
+Multiple fences per docstring and multiple ~X => Y~ lines per fence
+are both supported.  Lines inside a fence that contain no ~=>~ are
+silently ignored, so narrative prose and code comments can coexist with
+the assertions.
+
+The natural progression: start with a docstring example, check it with
+~snap-doctest~, and --- when the examples multiply enough that the
+docstring grows unwieldy --- move them to a ~deftest~ or
+~snap-define-relation~ in a dedicated ~*-tests.el~.
+
 * The eval-and-run workflow — ~C-x C-e~ does more
 
 *The problem.*  The usual TDD loop in ERT has two steps: ~C-x C-e~ at
@@ -450,6 +550,7 @@ uses the very primitive it exercises.  To run:
 #+begin_src shell
 emacs --batch \
       -l ~/snap/snap.el \
+      -l ~/snap/snap-doctest.el \
       -l ~/snap/snap-tests.el \
       -f ert-run-tests-batch-and-exit
 #+end_src
