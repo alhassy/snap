@@ -3,7 +3,7 @@
 ;; Copyright (c) 2025 Musa Al-hassy
 
 ;; Author: Musa Al-hassy <alhassy@gmail.com>
-;; Version: 0.1.0
+;; Version: 26.10.1
 ;; Package-Requires: ((s "1.13.1") (emacs "27.1"))
 ;; Keywords: testing, snapshot, ert
 ;; URL: https://github.com/alhassy/snap
@@ -126,7 +126,21 @@ The default is interpunct style (middle dot).  Alternatives:
   (thread-last description s-trim (s-split " ") car
                (s-replace-all (snap--name-replacements))))
 
-(cl-defmacro snap-define-fixture (name &optional docstring-or-form fixture-form)
+(defun snap--fixture-keys (arglist)
+  "The keywords of the `&key' ARGLIST; e.g., (&key text (at \"x\")) ↦ (:text :at)."
+  (mapcar (lambda (arg) (intern (format ":%s" (if (consp arg) (car arg) arg))))
+          (cdr arglist)))
+
+(defun snap--split-fixture-args (keys body)
+  "(KEYS, BODY) ↦ (ARGS . REST): BODY's leading KEY VALUE pairs, for KEYS, and the rest of BODY.
+  (:text \"hi\" :at \"h\" (should t)) ↦ ((:text \"hi\" :at \"h\") (should t))
+Other leading keywords, such as ERT's :expected-result, stay in REST."
+  (let (args)
+    (while (memq (car body) keys)
+      (setq args (append args (list (pop body) (pop body)))))
+    (cons args body)))
+
+(cl-defmacro snap-define-fixture (name &rest spec)
   "Define a new test macro NAME that wraps each test body in FIXTURE-FORM.
 A test fixture is the fixed baseline state that tests run against --
 the setup that must be in place before the test logic executes.  By
@@ -146,18 +160,21 @@ Each generated macro is also registered so that `C-x C-e'
 \(`eval-last-sexp') both defines and runs the test in one
 keystroke -- no separate `M-x ert' invocation needed.
 
-NAME is the symbol for the generated macro.  DOCSTRING-OR-FORM is
-either a documentation string (when FIXTURE-FORM is also provided)
-or the fixture form itself (when no docstring is needed).  When
-both are omitted, the generated macro has no fixture -- its body is
-spliced directly into `ert-deftest'.
+NAME is the symbol for the generated macro.  SPEC is
+  [DOCSTRING] [ARGLIST] FIXTURE-FORM
+each part optional.  With no FIXTURE-FORM, the generated macro has no
+fixture -- its body is spliced directly into `ert-deftest'.
 
 FIXTURE-FORM is an expression with a hole for the body -- represented
-by the symbol `&body'.  When nil, the body is spliced directly
-\(no wrapping).
+by the symbol `&body'.
+
+ARGLIST, of the shape (&key ARG …) with each ARG a symbol or (SYMBOL
+DEFAULT), lets each test pass the fixture its own values; FIXTURE-FORM
+sees them as variables.  A test passes them as keyword arguments right
+after its TAGS, before its body.
 
 The generated macro has the signature:
-  (NAME DESCRIPTION &optional TAGS &rest BODY)
+  (NAME DESCRIPTION &optional TAGS [:KEY VALUE]… &rest BODY)
 where DESCRIPTION is a string and TAGS is an optional vector.
 
 Users typically define their own convenience shorthand:
@@ -180,6 +197,21 @@ Then:
 
 expands to an `ert-deftest' wrapped in the fixture bindings.
 
+Example -- a fixture taking arguments: a fresh Org buffer holding TEXT,
+with point just after AT:
+  (snap-define-fixture org-deftest
+    (&key (text \"\") at)
+    (with-temp-buffer
+      (org-mode)
+      (insert text)
+      (goto-char (point-min))
+      (when at (search-forward at))
+      &body))
+
+Then:
+  (org-deftest \"a heading is a heading\" :text \"* Hi\" :at \"H\"
+    (should (org-at-heading-p)))
+
 Snapshot testing pattern:
 For relational tests -- where inputs produce expected outputs and
 you want `C-u C-x C-e' to auto-fill the expectations -- use
@@ -187,14 +219,11 @@ you want `C-u C-x C-e' to auto-fill the expectations -- use
 snapshot update, magit-styled [Show Diff], and [Update Snapshot]
 buttons in ERT failure output."
   (declare (indent 1))
-  ;; Disambiguate: if DOCSTRING-OR-FORM is a string, it's a docstring
-  ;; and FIXTURE-FORM is the fixture.  Otherwise DOCSTRING-OR-FORM is
-  ;; the fixture and there is no docstring.
-  (let* ((user-docstring (when (stringp docstring-or-form)
-                           docstring-or-form))
-         (fixture-form   (if (stringp docstring-or-form)
-                             fixture-form
-                           docstring-or-form))
+  ;; SPEC is [DOCSTRING] [ARGLIST] FIXTURE-FORM; an ARGLIST is recognised by its leading `&key'.
+  (let* ((user-docstring (when (stringp (car spec)) (pop spec)))
+         (arglist        (when (eq (car-safe (car spec)) '&key) (pop spec)))
+         (fixture-keys   (snap--fixture-keys arglist))
+         (fixture-form   (car spec))
          (ert-usage "\n\n\
 BODY is evaluated as a `progn' when the test is run.  It should
 signal a condition on failure or just return if the test passes.
@@ -225,11 +254,16 @@ it has to be wrapped in `(eval (quote ...))'.")
           (format "\"%s\" expects its first argument to be a string literal"
                   name))
          (wrap-expr
-          (if fixture-form
-              `(list
-                (cl-subst (cons 'progn actual-body) '&body
-                          ',fixture-form))
-            'actual-body)))
+          (cond (arglist
+                 ;; The test's leading :KEY VALUE pairs, evaluated as it runs, bind the ARGLIST.
+                 `(list
+                   `(cl-destructuring-bind ,',arglist (list ,@fixture-args)
+                      ,(cl-subst (cons 'progn actual-body) '&body ',fixture-form))))
+                (fixture-form
+                 `(list
+                   (cl-subst (cons 'progn actual-body) '&body
+                             ',fixture-form)))
+                (t 'actual-body))))
     `(progn
        (fancy-C-x-C-e-register ',name
          (lambda (form)
@@ -246,10 +280,18 @@ it has to be wrapped in `(eval (quote ...))'.")
              ((provided-tags (when (vectorp tags) (append tags nil)))
               (test-name (snap--test-name description provided-tags))
               (method-being-tested (snap--method-tag description))
-              (actual-body (if (vectorp tags) body (cons tags body)))
+              ;; The body's leading keyword pairs are the fixture's arguments, or ERT's own; e.g., :expected-result.
+              (split (snap--split-fixture-args ',(cons :expected-result fixture-keys)
+                                               (if (vectorp tags) body (cons tags body))))
+              (fixture-args (cl-loop for (key value) on (car split) by #'cddr
+                                     unless (eq key :expected-result) append (list key value)))
+              (ert-keywords (cl-loop for (key value) on (car split) by #'cddr
+                                     when (eq key :expected-result) append (list key value)))
+              (actual-body (cdr split))
               (wrapped-body ,wrap-expr))
            `(ert-deftest ,(intern test-name) ()
               :tags ',(cons method-being-tested provided-tags)
+              ,@ert-keywords
               ,@wrapped-body))))))
 
 ;; ═══════════════════════════════════════════════════════════════════

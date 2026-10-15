@@ -180,6 +180,35 @@
                    '(snap-tests--redef "check" (should (= v 2))))))
     (should (equal (cadr (nth 5 expanded)) '((v 2))))))
 
+;; A fixture taking arguments: each test passes its own values, as keywords after its tags.
+(snap-define-fixture snap-tests--with-greeting
+  "Bind GREETING, by default \"hello\", and NAME for the duration of BODY."
+  (&key (greeting "hello") name)
+  (let ((line (format "%s, %s" greeting name)))
+    &body))
+
+(snap-tests--with-greeting "a fixture binds the arguments a test passes" [snap snap-define-fixture arglist]
+  :name "world"
+  (should (equal line "hello, world")))
+
+(snap-tests--with-greeting "a test's arguments may override a fixture's defaults, in any order" [snap snap-define-fixture arglist]
+  :name "Musa" :greeting "salaam"
+  (should (equal line "salaam, Musa")))
+
+(deftest "a fixture's arguments are evaluated as the test runs, and bound around the fixture" [snap snap-define-fixture arglist]
+  (should (equal (nth 5 (macroexpand-1 '(snap-tests--with-greeting "x" :name (upcase "w") (should line))))
+                 '(cl-destructuring-bind (&key (greeting "hello") name) (list :name (upcase "w"))
+                    (let ((line (format "%s, %s" greeting name)))
+                      (progn (should line)))))))
+
+(snap-tests--with-greeting "ERT's :expected-result reaches ERT, rather than the fixture's body" [snap snap-define-fixture arglist]
+  :name "world" :expected-result :failed
+  (should (equal line "goodbye")))
+
+(snap-tests--with-flag "ERT's :expected-result reaches ERT for argument-free fixtures too" [snap snap-define-fixture]
+  :expected-result :failed
+  (should-not snap-tests--fixture-flag))
+
 ;; ═══════════════════════════════════════════════════════════════════
 ;; 4. `snap-define-relation' -- relational fixtures with snapshot updating
 ;; ═══════════════════════════════════════════════════════════════════
